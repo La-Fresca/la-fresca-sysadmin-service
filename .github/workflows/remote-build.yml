@@ -17,4 +17,4 @@ jobs:
           username: ${{ secrets.REMOTE_USERNAME }}
           key: ${{ secrets.REMOTE_KEY }}
           port: ${{ secrets.REMOTE_PORT }}
-          script: /home/ubuntu/workflow_scripts/frontend_action.sh
+          script: /home/ubuntu/workflow_scripts/sysadmin_action.sh
