@@ -7,11 +7,13 @@ const fs = require("fs");
 const path = require("path");
 const moment = require("moment");
 const jwt = require('jsonwebtoken');
+const cors = require('cors');
 
 const app = express();
 const PORT = 3000;
 
 // Middleware
+app.use(cors());  // Enable CORS for all origins
 app.use(bodyParser.json());
 
 // JWT authentication middleware
