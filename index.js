@@ -18,28 +18,49 @@ app.use(bodyParser.json());
 
 // JWT authentication middleware
 const authenticateToken = (req, res, next) => {
+  console.log('Auth Header:', req.headers['authorization']?.substring(0, 20) + '...');
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
+    console.log('Authentication failed: No token provided');
     return res.status(401).json({ error: 'No token provided' });
   }
 
   try {
+    console.log('Token received, length:', token.length);
+    console.log('Current server time:', new Date().toISOString());
+    
     // Decode base64 secret to get the actual key bytes
     const key = Buffer.from(process.env.JWT_SECRET, 'base64');
-    const decoded = jwt.verify(token, key, {
+    console.log('JWT Secret length:', key.length, 'bytes');
+    
+    // Decode token without verification to check payload
+    const decoded = jwt.decode(token);
+    console.log('Token payload:', {
+      exp: decoded?.exp ? new Date(decoded.exp * 1000).toISOString() : 'none',
+      iat: decoded?.iat ? new Date(decoded.iat * 1000).toISOString() : 'none',
+      role: decoded?.role || 'none'
+    });
+
+    const verified = jwt.verify(token, key, {
       algorithms: ['HS384']
     });
     
-    if (!decoded.role || !['ADMIN', 'SYSADMIN'].includes(decoded.role)) {
+    if (!verified.role || !['ADMIN', 'SYSADMIN'].includes(verified.role)) {
+      console.log('Authentication failed: Invalid role:', verified.role);
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
     
-    req.user = decoded;
+    req.user = verified;
+    console.log('Authentication successful for role:', verified.role);
     next();
   } catch (error) {
-    console.error('Token verification error:', error.message);
+    console.error('Token verification error:', {
+      name: error.name,
+      message: error.message,
+      expiredAt: error.expiredAt ? new Date(error.expiredAt).toISOString() : null
+    });
     return res.status(403).json({ error: 'Invalid token' });
   }
 };
