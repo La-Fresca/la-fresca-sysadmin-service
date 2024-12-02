@@ -6,12 +6,41 @@ const { Dropbox } = require("dropbox");
 const fs = require("fs");
 const path = require("path");
 const moment = require("moment");
+const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = 3000;
 
 // Middleware
 app.use(bodyParser.json());
+
+// JWT authentication middleware
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  try {
+    // Decode base64 secret to get the actual key bytes
+    const key = Buffer.from(process.env.JWT_SECRET, 'base64');
+    const decoded = jwt.verify(token, key, {
+      algorithms: ['HS384']
+    });
+    
+    if (!decoded.role || !['ADMIN', 'SYSADMIN'].includes(decoded.role)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    
+    req.user = decoded;
+    next();
+  } catch (error) {
+    console.error('Token verification error:', error.message);
+    return res.status(403).json({ error: 'Invalid token' });
+  }
+};
 
 // Backup storage location
 const BACKUP_DIR = path.join(__dirname, "backups");
@@ -66,6 +95,24 @@ const createBackup = async () => {
   return backupName;
 };
 
+// Utility function to list Dropbox backups
+const listDropboxBackups = async () => {
+  const dbx = new Dropbox({ accessToken: dropboxToken });
+  try {
+    const response = await dbx.filesListFolder({ path: '' });
+    return response.result.entries
+      .filter(entry => entry.name.endsWith('.gz'))
+      .map(entry => ({
+        name: entry.name,
+        size: entry.size,
+        modified: entry.server_modified
+      }));
+  } catch (error) {
+    console.error("Error listing Dropbox backups:", error);
+    throw error;
+  }
+};
+
 // Restore utility
 const restoreBackup = async (backupName) => {
   const dbx = new Dropbox({ accessToken: dropboxToken });
@@ -73,8 +120,8 @@ const restoreBackup = async (backupName) => {
 
   try {
     // Download the backup from Dropbox
-    const { fileBinary } = await dbx.filesDownload({ path: `/${backupName}` });
-    fs.writeFileSync(backupPath, fileBinary);
+    const { result } = await dbx.filesDownload({ path: `/${backupName}` });
+    fs.writeFileSync(backupPath, result.fileBinary);
 
     console.log(`Backup downloaded: ${backupName}`);
 
@@ -91,8 +138,14 @@ const restoreBackup = async (backupName) => {
     });
 
     console.log(`Database restored from: ${backupName}`);
+    
+    // Clean up downloaded file
+    fs.unlinkSync(backupPath);
   } catch (error) {
     console.error("Error restoring backup:", error);
+    if (fs.existsSync(backupPath)) {
+      fs.unlinkSync(backupPath);
+    }
     throw error;
   }
 };
@@ -132,7 +185,7 @@ const scheduleBackup = (interval) => {
 };
 
 // Routes
-app.post("/schedule", (req, res) => {
+app.post("/schedule", authenticateToken, (req, res) => {
   const { interval } = req.body;
   try {
     scheduleBackup(interval);
@@ -142,14 +195,16 @@ app.post("/schedule", (req, res) => {
   }
 });
 
-app.get("/backups", (req, res) => {
-  const files = fs
-    .readdirSync(BACKUP_DIR)
-    .filter((file) => file.endsWith(".gz"));
-  res.status(200).json(files);
+app.get("/backups", authenticateToken, async (req, res) => {
+  try {
+    const backups = await listDropboxBackups();
+    res.status(200).json(backups);
+  } catch (error) {
+    res.status(500).send(error.message);
+  }
 });
 
-app.post("/backup", async (req, res) => {
+app.post("/backup", authenticateToken, async (req, res) => {
   try {
     const backupName = await createBackup();
     res.status(200).send(`Backup created: ${backupName}`);
@@ -158,7 +213,7 @@ app.post("/backup", async (req, res) => {
   }
 });
 
-app.post("/restore", async (req, res) => {
+app.post("/restore", authenticateToken, async (req, res) => {
   const { backupName } = req.body;
   try {
     await restoreBackup(backupName);
